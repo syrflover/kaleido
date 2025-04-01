@@ -1,0 +1,16 @@
+[package]
+name = "kaleido"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rkiwi = { git = "https://github.com/syrflover/kiwi-rs", branch = "master", features = ["impl_send"] }
+# kiwi = { path = "../../kiwi-rs" }
+
+linfa-preprocessing = "0.7"
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "fs"] }
+byteview = "0.6"
+serde_json = "1.0"
+widestring = "1.2"
+futures = "0.3"
+# faiss = { version = "0.12", features = [] }
