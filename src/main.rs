@@ -10,13 +10,12 @@ use widestring::{U16Str, U16String, u16str};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let typo = TypoTransformer::default(DefaultTypoSet::BasicTypoSetWithContinualAndLengthening)?;
-
     let kiwi = KiwiBuilder::new(None, Default::default())?.build(None, None)?;
 
-    let mut reader = BufReader::new(File::open("txt.json")?);
+    let mut reader = BufReader::new(File::open("data.json")?);
 
-    let bytes = ByteView::from_reader(&mut reader, fs::metadata("txt.json").await?.len() as usize)?;
+    let bytes =
+        ByteView::from_reader(&mut reader, fs::metadata("data.json").await?.len() as usize)?;
 
     let xs = serde_json::from_slice::<Vec<String>>(&bytes)?;
 
@@ -29,10 +28,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .await;
-
-    // let text = "후타나리 음침녀에게 내가 관심 있던 여자애들을 네토라레 당하는 이야기 l Futanari nekura on'na ni boku ga ki ni natteta on'nanoko-tachi o ōne chinbo de ne tora reru hanashi";
-
-    // process(&kiwi, U16String::from_str(text))?;
 
     // let mut index = index_factory(8, "Flat", MetricType::L2).unwrap();
 
@@ -428,6 +423,12 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
 // foreign : Zemi no Bounenkai (Zenpen)
 // korean  : 세미나 송년회 (decensored)
 //
+// "Miru" SL / "Harumin" SL / "!" SF / "To" SL / "Harent" SL / "#2" W_HASHTAG / "|" SW / "투하트" NNP /
+// reverse : false
+// origin  : Miru Harumin! To Harent#2 | 투하트
+// foreign : Miru Harumin! To Harent#2
+// korean  : 투하트
+//
 // 에피소드가 한국어에만 있는 건 상관 없음
 // 외국어에만 있고, 한국어에만 없는 걸 찾아내서 가져와야함
 // 규칙을 새로 만들기: vol vol. ch ch. part 뒤에 숫자가 있는 경우 또는 (Zenpen) 같은 것들 => H_EP
@@ -438,6 +439,66 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
 // origin  : KissNTR.Gold 3.일러모음
 // foreign : KissNTR.Gold
 // korean  : 3.일러모음
+//
+// 이건 이미지셋 아님.
+// "철" NNG / "혈" NNG / "M" SL / "16" SN /
+// reverse : true
+// origin  : 철혈 M16
+// foreign : M16
+// korean  : 철혈
+//
+// origin  : 네게브 x 카98k / Negev x Kar98k
+// foreign : k / Negev x Kar98k
+// korean  : 네게브 x 카98
+//
+// reverse : true
+// origin  : Yuukyuu no Shou Elf 1 "Dokuhebi" | 유구의 창엘프 1 "독사"
+// foreign : | 유구의 창엘프 1 "독사"
+// korean  : Yuukyuu no Shou Elf 1 "Dokuhebi"
+//
+// reverse : true
+// origin  : Nakama de Pokapoka+후일담추가 | 따끈따끈 친구
+// foreign : | 따끈따끈 친구
+// korean  : Nakama de Pokapoka+후일담추가
+//
+// reverse : true
+// origin  : Yuukyuu no Shou Elf 2 "Shoukei" | 유구의 창엘프 2 "동경"
+// foreign : | 유구의 창엘프 2 "동경"
+// korean  : Yuukyuu no Shou Elf 2 "Shoukei"
+//
+// reverse : true
+// origin  : 설이벗방TV♥
+// foreign : TV♥
+// korean  : 설이벗방
+//
+// reverse : true
+// origin  : 헬스녀 개인PT♥
+// foreign : PT♥
+// korean  : 헬스녀 개인
+//
+// reverse : true
+// origin  : 도구의 올바른 사용법 Vol.3
+// foreign : Vol.3
+// korean  : 도구의 올바른 사용법
+//
+// reverse : true
+// origin  : Hamechichi! 하메찌찌! Ch. 1 (uncensored)
+// foreign : Ch. 1 (uncensored)
+// korean  : Hamechichi! 하메찌찌!
+//
+// reverse : true
+// origin  : Ano! Okaa-san no Shousai - Manatsu no Oyako SEX l 그! 엄마의 상세 ~한여름의 모자 SEX~
+// foreign : SEX~
+// korean  : Ano! Okaa-san no Shousai - Manatsu no Oyako SEX l 그! 엄마의 상세 ~한여름의 모자
+//
+// 이런 식으로 같은 제목임에도 한국어 제목이 특정 작품에만 없는 경우, 한국어 제목을 생성해줘야함
+// "Expert ni Narimashita! 5 | 전문가가 되었습니다! 5",
+// "Expert ni Narimashita! 4",
+// "Expert ni Narimashita! 3 | 전문가가 되었습니다! 3",
+//
+// "Ja Ja Ja Ja Japan | 재재재재 재빵 1",
+// "Ja Ja Ja Ja Japan 2",
+// "Ja Ja Ja Ja Japan 3",
 
 #[test]
 fn foreign_only() -> Result<(), Box<dyn std::error::Error>> {
