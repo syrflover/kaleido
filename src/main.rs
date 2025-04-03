@@ -1,6 +1,7 @@
 #![allow(clippy::collapsible_else_if)]
-use std::{fs::File, io::BufReader, ops::Range};
+use std::{fs::File, io::BufReader};
 
+use arrayvec::ArrayVec;
 use byteview::ByteView;
 use futures::{StreamExt, stream};
 use rkiwi::{Kiwi, KiwiBuilder, Match, POSTag, analyzed::Token};
@@ -40,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn is_foreign(pos_tag: &POSTag) -> bool {
-    (POSTag::SF..=POSTag::W_EMOJI).contains(pos_tag)
+fn is_korean(pos_tag: &POSTag) -> bool {
+    !(POSTag::SF..=POSTag::W_EMOJI).contains(pos_tag)
 }
 
 /// foreign.includes(special) == true
@@ -51,21 +52,21 @@ fn is_special(pos_tag: &POSTag) -> bool {
 
 fn find_subtitle<'a>(
     xs: impl Iterator<Item = &'a (U16String, Token)>,
-) -> Vec<(usize, usize, Range<usize>)> {
-    let mut res = Vec::new();
+) -> ArrayVec<(usize, usize), 2> {
+    let mut res = ArrayVec::<_, 2>::new();
 
     let mut start = 0;
-    let mut start_i = 0;
     let mut open_so = false;
 
     for (i, (_form, token)) in xs.enumerate() {
         if token.tag == POSTag::SO && !open_so {
             open_so = true;
-            start = token.chr_position;
-            start_i = i;
+            start = i;
         } else if token.tag == POSTag::SO && open_so {
             open_so = false;
-            res.push((start_i, i, start..token.chr_position + token.length));
+            if res.try_push((start, i)).is_err() {
+                return res;
+            }
         }
     }
 
@@ -84,14 +85,22 @@ fn test_find_subtitle() -> Result<(), Box<dyn std::error::Error>> {
     let xs = analyzed.to_vec_w();
     let res = find_subtitle(xs.iter());
 
+    fn start(xs: &[(U16String, Token)], res: &[(usize, usize)], i: usize) -> usize {
+        let token = xs[res[i].0].1;
+        token.chr_position
+    }
+
+    fn end(xs: &[(U16String, Token)], res: &[(usize, usize)], i: usize) -> usize {
+        let token = xs[res[i].1].1;
+        token.chr_position + token.length
+    }
+
     assert_eq!(
-        &txt[xs[res[0].0].1.chr_position..xs[res[0].1].1.chr_position + xs[res[0].1].1.length]
-            .to_string()?,
+        &txt[start(&xs, &res, 0)..end(&xs, &res, 0)].to_string()?,
         "~나의 버스 가이드 일지~"
     );
     assert_eq!(
-        &txt[xs[res[1].0].1.chr_position..xs[res[1].1].1.chr_position + xs[res[1].1].1.length]
-            .to_string()?,
+        &txt[start(&xs, &res, 1)..end(&xs, &res, 1)].to_string()?,
         "~Boku no Bus Guide Nisshi~"
     );
 
@@ -122,34 +131,52 @@ fn find_korean<'a>(
         let (curr_i, (_curr_form, curr_token)) = iter.next()?;
 
         if open_so {
-            // println!("{} {}", _curr_form.display(), curr_token.tag);
             subtitle_count += 1;
         }
 
-        if is_foreign(&curr_token.tag) {
+        if is_korean(&curr_token.tag) {
+            if let Some((next_i, (_next_form, next_token))) = iter.peek() {
+                if is_special(&next_token.tag) && next_token.tag != POSTag::SP && !open_ss {
+                    if next_token.tag == POSTag::SN {
+                        return Some(curr_i);
+                    } else {
+                        return Some(*next_i);
+                    }
+                } else {
+                    return Some(curr_i);
+                }
+            }
+        } else {
             if is_special(&curr_token.tag) && curr_token.tag != POSTag::SP && !open_ss {
                 if let Some((next_i, (_next_form, next_token))) = iter.peek() {
-                    // range episode 조건은 reverse에서만 접근함
-                    if start_episode && curr_token.tag == POSTag::SO && next_token.tag == POSTag::SN
-                    {
-                        return Some(*next_i - 2);
-                    } else {
-                        start_episode = false;
-                    }
+                    // 역방향인 경우에 일부 보정이 필요함
+                    //
+                    // 정방향일 경우에는 한국어가 뒤에 있기 때문에 이런 조건이 필요 없지만
+                    // 역방향일 경우에는 외국어 부제목을 먼저 마주하기 때문에 보정이 필요함
+                    if reversed {
+                        // 역방향일 경우, range episode가 끝까지 추출되지 않는 문제를 해결함
+                        if start_episode
+                            && curr_token.tag == POSTag::SO
+                            && next_token.tag == POSTag::SN
+                        {
+                            return Some(*next_i - 2);
+                        } else {
+                            start_episode = false;
+                        }
 
-                    // println!("{}", subtitle_count);
-                    if reversed && curr_token.tag == POSTag::SO && subtitle_count > 0 {
-                        match subtitles.get(1) {
-                            Some((_s, e, _r)) if *e != curr_i => {
-                                // println!("subtitle: {} {}", subtitles[1].0, subtitles[1].1);
-                            }
-                            _ => {
-                                return Some(curr_i - subtitle_count);
+                        // 역방향일 경우, 이른 subtitle 추출을 방지함
+                        // 해당 조건이 없으면 한국어 제목과 부제목이 모두 날아가고, 외국어만 추출됨
+                        if curr_token.tag == POSTag::SO && subtitle_count > 0 {
+                            match subtitles.get(1) {
+                                Some((_s, e)) if *e != curr_i => {}
+                                _ => {
+                                    return Some(curr_i - subtitle_count);
+                                }
                             }
                         }
                     }
 
-                    if !is_foreign(&next_token.tag) && !open_so {
+                    if is_korean(&next_token.tag) && !open_so {
                         if !reversed
                             && (curr_token.tag == POSTag::SF || curr_token.tag == POSTag::SW)
                         {
@@ -161,16 +188,12 @@ fn find_korean<'a>(
             }
 
             // TODO: 여는 부호와 닫는 부호가 둘 다 있는지 체크해야함?
-            if
-            /* has_sso_ssc && */
-            // (
-            curr_token.tag == POSTag::SSO || curr_token.tag == POSTag::SSC
-            // )
-            {
+            if curr_token.tag == POSTag::SSO || curr_token.tag == POSTag::SSC {
                 open_ss = !open_ss;
             }
 
             if curr_token.tag == POSTag::SO {
+                // 부제목 토큰 개수 초기화
                 if open_so && subtitle_count > 0 {
                     subtitle_count = 0;
                 }
@@ -178,20 +201,8 @@ fn find_korean<'a>(
                 open_so = !open_so;
             }
 
-            if curr_token.tag == POSTag::SN && !start_episode {
+            if !start_episode && curr_token.tag == POSTag::SN {
                 start_episode = true;
-            }
-        } else {
-            if let Some((next_i, (_next_form, next_token))) = iter.peek() {
-                if is_special(&next_token.tag) && next_token.tag != POSTag::SP && !open_ss {
-                    if next_token.tag == POSTag::SN {
-                        return Some(curr_i);
-                    } else {
-                        return Some(*next_i);
-                    }
-                } else {
-                    return Some(curr_i);
-                }
             }
         }
     }
@@ -211,7 +222,6 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
         // .split_saisiot(true)
         // .compatible_jamo(true)
         .all_with_normailize_coda();
-    // .mention(false);
 
     let analyzed = kiwi.analyze_w(text, 1, match_options, None, None)?;
 
@@ -222,20 +232,22 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
     }
     println!();
 
-    let mut s_w_count = 0;
-    let mut has_ko = false;
     let mut reverse = false;
+
+    // count(S..=W)
+    let mut fr_count = 0;
+    let mut has_ko = false;
     let mut has_pipe = false;
 
     let mut ko_start = 0;
     let first_korean = find_korean(xs.iter(), false);
 
     for (i, (form, token)) in xs.iter().enumerate() {
-        if is_foreign(&token.tag) && !has_ko {
-            s_w_count += 1;
-        } else {
-            s_w_count = 0;
+        if is_korean(&token.tag) || has_ko {
+            fr_count = 0;
             has_ko = true;
+        } else {
+            fr_count += 1;
         }
 
         if is_pipe(form) {
@@ -243,18 +255,20 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
                 continue;
             }
 
-            has_pipe = true;
-            s_w_count -= 1;
-
+            // 해당 반복문은 `foreign | 한글` 에서 한글을 추출함
+            // pipe를 만나기도 전에 한글이 있으면 반대로 돌아야함
             if has_ko {
-                s_w_count = 0;
+                fr_count = 0;
                 reverse = true;
                 break;
             }
 
-            let score = s_w_count as f32 / i as f32;
+            has_pipe = true;
+            fr_count -= 1;
 
-            println!("score   : {:.5} / {}", score, form.display());
+            let score = fr_count as f32 / i as f32;
+
+            // println!("score   : {:.5} / {}", score, form.display());
 
             if score >= 1.0 {
                 ko_start = token.chr_position + token.length;
@@ -266,14 +280,14 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
         match first_korean {
             Some(first_korean) if !has_pipe && i < first_korean => {
                 if has_ko {
-                    s_w_count = 0;
+                    fr_count = 0;
                     reverse = true;
                     break;
                 }
 
-                let score = s_w_count as f32 / i as f32;
+                let score = fr_count as f32 / i as f32;
 
-                println!("score   : {:.5} / {}", score, form.display());
+                // println!("score   : {:.5} / {}", score, form.display());
 
                 if score >= 1.0 {
                     ko_start = token.chr_position + token.length;
@@ -283,7 +297,7 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
             }
             Some(0) => {
                 if has_ko {
-                    s_w_count = 0;
+                    fr_count = 0;
                     reverse = true;
                     break;
                 }
@@ -303,11 +317,11 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
             last.chr_position + last.length
         };
         for (i, (form, token)) in xs.iter().enumerate() {
-            if is_foreign(&token.tag) && !has_ko {
-                s_w_count += 1;
-            } else {
-                s_w_count = 0;
+            if is_korean(&token.tag) || has_ko {
+                fr_count = 0;
                 has_ko = true;
+            } else {
+                fr_count += 1;
             }
 
             if is_pipe(form) {
@@ -316,16 +330,17 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
                 }
 
                 has_pipe = true;
-                s_w_count -= 1;
+                fr_count -= 1;
+
                 ko_end = token.chr_position;
                 ko_end_index = i;
             }
 
             match last_korean {
                 Some(last_korean) if !has_pipe && i < last_korean => {
-                    let score = s_w_count as f32 / i as f32;
+                    let score = fr_count as f32 / i as f32;
 
-                    println!("score   : {:.5} / {}", score, form.display());
+                    // println!("score   : {:.5} / {}", score, form.display());
 
                     if score <= 0.0 {
                         ko_end = token.chr_position + token.length;
@@ -336,25 +351,20 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
             }
         }
 
-        let score = (xs.len() - ko_end_index) as f32 / s_w_count as f32;
+        let score = (xs.len() - ko_end_index) as f32 / fr_count as f32;
 
-        println!("score   : {:.5}", score,);
+        // println!("score   : {:.5}", score,);
 
         if score < 1.0 {
             ko_end = 0;
         }
     }
 
-    // if !has_ko {
-    //     ko_start = 0;
-    // }
-
     println!("reverse : {}", reverse);
 
     println!("origin  : {}", text.display());
     let res = if reverse {
         if has_ko {
-            // let fr_start = if has_pipe { ko_end } else { ko_end };
             let fr_start = ko_end;
             let fr = text[fr_start..].to_string().unwrap().trim().to_owned();
             let ko = text[..ko_end].to_string().unwrap().trim().to_owned();
@@ -391,7 +401,7 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
 }
 
 // TODO: 쓸데없는 문자 제거
-// 토끼 구멍에 빠지다 (Blue Archive) [Korean} <- (Blue Archive) [Korean}
+// 토끼 구멍에 빠지다 (Blue Archive) [Korean} <- [Korean}
 // 슈텐도지 (decensored) <- (decensored) / 제거하기 전에 작품 정보에 검열되지 않았다는 것을 표기해야함 (uncensored)
 // 울보 공주와 사천왕 시오후키 섹스 4번 승부 [Korean]
 //
@@ -418,6 +428,10 @@ fn process(kiwi: &Kiwi, text: &str) -> Result<(String, String), Box<dyn std::err
 // origin  : Zemi no Bounenkai (Zenpen) | 세미나 송년회 (decensored)
 // foreign : Zemi no Bounenkai (Zenpen)
 // korean  : 세미나 송년회 (decensored)
+//
+// 에피소드가 한국어에만 있는 건 상관 없음
+// 외국어에만 있고, 한국어에만 없는 걸 찾아내서 가져와야함
+// 규칙을 새로 만들기: vol vol. ch ch. part 뒤에 숫자가 있는 경우 또는 (Zenpen) 같은 것들 => H_EP
 //
 // ch.1 Vol.05 (Zenpen) 전편
 //
@@ -526,7 +540,7 @@ fn korean_only() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn korean_with_sw() -> Result<(), Box<dyn std::error::Error>> {
+fn korean_only_with_sw() -> Result<(), Box<dyn std::error::Error>> {
     let kiwi = KiwiBuilder::new(None, Default::default())?.build(None, None)?;
 
     // "애액" NNP / "스노우" NNP / "볼" NNG / "🎄" SW /
@@ -559,6 +573,18 @@ fn open_and_close_ss() -> Result<(), Box<dyn std::error::Error>> {
         "[korean} Himitsu no Bus Tour ~Boku no Bus Guide Nisshi~"
     );
     assert_eq!(res.1, "비밀의 버스 투어 ~나의 버스 가이드 일지~");
+
+    Ok(())
+}
+
+#[test]
+fn normal() -> Result<(), Box<dyn std::error::Error>> {
+    let kiwi = KiwiBuilder::new(None, Default::default())?.build(None, None)?;
+
+    let txt = "Gakuen IDOLM@STER Fundoshi Goudou | 학원 아이돌마스터 훈도시 합동";
+    let res = process(&kiwi, txt)?;
+    assert_eq!(res.0, "Gakuen IDOLM@STER Fundoshi Goudou");
+    assert_eq!(res.1, "학원 아이돌마스터 훈도시 합동");
 
     Ok(())
 }

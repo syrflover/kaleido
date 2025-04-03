@@ -13,4 +13,5 @@ byteview = "0.6"
 serde_json = "1.0"
 widestring = "1.2"
 futures = "0.3"
+arrayvec = "0.7.6"
 # faiss = { version = "0.12", features = [] }
