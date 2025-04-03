@@ -45,7 +45,6 @@ fn is_korean(pos_tag: &POSTag) -> bool {
     !(POSTag::SF..=POSTag::W_EMOJI).contains(pos_tag)
 }
 
-/// foreign.includes(special) == true
 fn is_special(pos_tag: &POSTag) -> bool {
     (POSTag::SF..=POSTag::SB).contains(pos_tag) || (POSTag::SN..=POSTag::W_EMOJI).contains(pos_tag)
 }
